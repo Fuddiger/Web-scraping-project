@@ -1,0 +1,74 @@
+import requests
+import bs4
+import lxml
+import re
+from datetime import date
+
+#Opens the file with the web links in it. Each web link should be separated with a ',' for now
+def get_links(file_path):
+    f = open(file_path, 'r')
+    sites_clump = f.read()
+    site_list = sites_clump.split(',')
+    f.close()
+    return site_list
+
+#Makes a link into a beautiful soup
+def make_soup(link):
+    request = requests.get(link)
+    soup = bs4.BeautifulSoup(request.text,'lxml',)
+    return soup
+
+#Various searches to find a publication date, new searches can be added as not found results come up. Returns a text string of the date or 'Not found'
+def scrape_soup_date(soup):
+    if soup.find('time'):
+        find_date = soup.find('time').get_text()
+        date = find_date.strip()
+        return date
+    else:
+        soup_text = soup.text
+        if re.search(r'\d{1,4}(/|-)\d{1,2}(/|-)\d{1,4}',soup_text):
+            date = re.search(r'\d{1,4}/\d{1,2}/\d{1,4}', soup_text).group()
+            return date
+        elif re.search(r'\w{3,4}\s\d{1,2},\s\d{1,4}',soup_text):
+            date = re.search(r'\w{3,4}\s\d{1,2},\s\d{1,4}',soup_text).group()
+            return date
+        else:
+            return 'Not found'
+
+#Returns the text from <title>
+def scrape_soup_title(soup):
+    title = soup.find('title').get_text()
+    return title
+
+#Returns text from all <p> tags concatenated into a block of text
+def scrape_soup_text(soup):
+    paragraphs = soup.find_all('p')
+    all_text = ''
+    for paragraph in paragraphs:
+        all_text += paragraph.get_text()
+    return all_text
+
+#Returns today's date, some publication dates come up as e.g. '2 hours ago (20:22 gmt)', so this date provides context
+def get_the_date():
+    date_object = date.today()
+    today = date_object.strftime("%d/%m/%y")
+    return today
+
+#Place the full file link here with full websites delimited by commas
+file = 
+#The websites from the file
+websites = get_links(file)
+#Getting the date
+today = get_the_date()
+#Performs task for each link
+for link in websites:
+    soup = make_soup(link)
+    title = scrape_soup_title(soup)
+    date = scrape_soup_date(soup)
+    text = scrape_soup_text(soup)
+    #For now it will print the info
+    print(f'Title: {title}')
+    print(f'Publication Date: {date}')
+    print(f'Date Scraped: {today}')
+    print(text)
+    print('\n')
