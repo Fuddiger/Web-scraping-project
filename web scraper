@@ -20,9 +20,8 @@ def make_soup(link):
 
 #Various searches to find a publication date, new searches can be added as not found results come up. Returns a text string of the date or 'Not found'
 def scrape_soup_date(soup):
-    if soup.find('time'):
-        find_date = soup.find('time').get_text()
-        date = find_date.strip()
+    if soup.time:
+        date = soup.time.string
         return date
     else:
         soup_text = soup.text
@@ -51,7 +50,7 @@ def scrape_soup_text(soup):
 #Returns today's date, some publication dates come up as e.g. '2 hours ago (20:22 gmt)', so this date provides context
 def get_the_date():
     date_object = date.today()
-    today = date_object.strftime("%d/%m/%y")
+    today = date_object.utctime("%d/%m/%y")
     return today
 
 #Place the full file link here with full websites delimited by commas
