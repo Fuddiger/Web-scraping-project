@@ -1,15 +1,17 @@
-import requests
 import bs4
+import csv
 import re
+import requests
 from datetime import date
 
-#Opens the file with the web links in it. Each web link should be separated with a ',' for now
+#Opens a CSV file or text file where each website is on one line, delimited by a comma
 def get_links(file_path):
-    f = open(file_path, 'r')
-    sites_clump = f.read()
-    site_list = sites_clump.split(',')
-    f.close()
-    return site_list
+    with open(file_path, newline='') as f:
+        reader = csv.reader(f)
+        sites = []
+        for row in reader:
+            sites.append(row[0])
+        return sites
 
 #Makes a link into a beautiful soup
 def make_soup(link):
@@ -55,8 +57,19 @@ def get_the_date():
     date_object = date.today()
     return date_object
 
+#Writes the data to a file to be processed later
+def data_write(title, date, text):
+    with open('scraper.txt', 'a', newline='', encoding='utf-8') as a:
+        writer = csv.writer(a)
+        writer.writerow([title])
+        if date == 'Not found':
+            writer.writerow(['Scraped: ', today, ' (publication date not found)'])
+        else:
+            writer.writerow([date])
+        writer.writerow([text, '\n'])
+
 #Place the full file link here with full websites delimited by commas
-file =
+file = r'C:\Users\andre\OneDrive\Documents\Downloads\Files_for_scrape.txt'
 #The websites from the file
 websites = get_links(file)
 #Getting the date
@@ -69,10 +82,5 @@ for link in websites:
     title = scrape_soup_title(soup)
     date = scrape_soup_date(soup)
     text = scrape_soup_text(soup)
-    #For now it will print the info
-    print(f'Title: {title}')
-    print(f'Publication Date: {date}')
-    print(f'Date Scraped: {today}')
-    print(text)
-    print('\n')
+    data_write(title, date, text)
 print(counter)
