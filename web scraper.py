@@ -1,136 +1,205 @@
+import asyncio
+import aiohttp
 import csv
+import logging
 import re
-import requests
-from bs4 import BeautifulSoup as bs
+from bs4 import BeautifulSoup as BS
 from datetime import datetime
 from time import perf_counter
 
+# Logs issues where information could not be correctly scraped, issues with scrape patterns and connection issues
+logging.basicConfig(filename='web_scraper_logs.log', filemode='w')
 
-# Returns Bs4 object for a website or one of it's news article links
-def make_soup(link):
-    response = requests.get(link)
-    soup = bs(response.text, 'lxml')
+
+async def site_response(session: aiohttp.ClientSession, link: str) -> list[str, str]:
+    """Return a response object from a weblink"""
+    try:
+        async with session.get(link) as response:
+            response.raise_for_status()
+            return [await response.text(), response.url]
+    except aiohttp.ClientResponseError as e:
+        logging.warning(f'{link} gave {e} status error')
+        return False
+    except aiohttp.InvalidURL:
+        logging.warning(f'{link} is invalid')
+        return False
+    except aiohttp.ClientConnectionError as e:
+        logging.warning(f'{link} gave {e}')
+        return False
+
+
+def collect_hrefs(soup: BS, link_patterns: dict[str]) -> list[str]:
+    """Return a list of article links to be scraped, using RE patterns and a BS4 object"""
+    article_links = [tag['href'] if re.search(r"^https:", tag['href']) else "https:" + tag['href']
+                     for link_pattern in link_patterns
+                     for tag in soup.find_all('a', href=re.compile(link_pattern))]
+    return article_links
+
+
+async def queue_maker(article_links: set[str], queue: asyncio.Queue) -> None:
+    """Take a set of article links and add to an asynchronous queue"""
+    for link in article_links:
+        queue.put_nowait(link)
+
+
+async def process_queue(session: aiohttp.ClientSession, queue: asyncio.Queue) -> list[list[str, str]]:
+    """Return a list of response objects from article links in the queue"""
+    response_list = []
+    while True:
+        if queue.empty():
+            return response_list
+        link = await queue.get()
+        response = await site_response(session, link)
+        if response:
+            response_list.append(response)
+        queue.task_done()
+
+
+def make_soup(response: str) -> BS:
+    """Return a BeautifulSoup object using a response.text"""
+    soup = BS(response, 'lxml')
     return soup
 
 
-# return all href links as a set, using soup object and the specified re.compile pattern in site_params. Some links
-# from Fox News did not include 'https:', searches for and repairs those as well
-def collect_hrefs(site_soup, link_patterns):
-    links = [tag['href'] if re.search(r"^https:", tag['href']) else "https:" + tag['href']
-             for link_pattern in link_patterns
-             for tag in site_soup.find_all('a', href=re.compile(link_pattern))]
-    if not links:
-        print(f'No links matching the pattern were found for {site_soup.title}')
-    else:
-        return set(links)
-
-
-# Returns the title of a news article as a string
-def scrape_title(soup):
+def scrape_title(soup: BS) -> str:
+    """Return the title of news article"""
     title = soup.title.get_text(strip=True)
     return title
 
 
-# Returns publishing date using soup and date search parameters, from site_params
-def scrape_date(soup, date_patterns):
-    for d_p in date_patterns:
-        if d_p['search']:
-            if soup.find(d_p['tag'], string=re.compile(d_p['search'])):
-                return soup.find(d_p['tag'], string=re.compile(d_p['search'])).get_text(separator=' ', strip=True)
-        elif d_p['contents']:
-            if soup.find(d_p['tag']).contents[d_p['contents']]:
-                return soup.find(d_p['tag']).contents[d_p['contents']].get_text(separator=' ', strip=True)
-        else:
-            if soup.find(d_p['tag']):
-                return soup.find(d_p['tag']).get_text(separator=' ', strip=True)
-    return 'Date was not matched successfully'
-
-
-# Returns publishing date as a strptime object using the date and the patterns specified in site_params
-def str_to_date(date, strp_patterns):
+def str_to_date(date: str, strp_patterns: list[str]) -> datetime:
+    """Attempt to make a datetime object from a date string and return it"""
     for strp_pattern in strp_patterns:
         try:
             datetime.strptime(date, strp_pattern)
             return datetime.strptime(date, strp_pattern)
         except ValueError:
-            pass
-    return 'Strptime patterns did not match date values'
+            continue
+    return False
 
 
-# Returns the stripped text of a news article delimited with spaces
-def scrape_text(soup):
+def scrape_date(soup: BS, date_patterns: list[dict[str]], strp_patterns: list[str]) -> tuple[str, datetime]:
+    """Attempt to find and return a publishing date and date object of that date using RE search patterns"""
+    for d_p in date_patterns:
+        if not d_p['search'] and not d_p['contents']:
+            if soup.find(d_p['tag']):
+                article_date = soup.find(d_p['tag']).get_text(separator=' ', strip=True)
+                date_object = str_to_date(article_date, strp_patterns)
+            else:
+                date_object = False
+        elif d_p['search']:
+            if soup.find(d_p['tag'], string=re.compile(d_p['search'])):
+                article_date = soup.find(d_p['tag'], string=re.compile(d_p['search'])).get_text(separator=' ',
+                                                                                                strip=True)
+                date_object = str_to_date(article_date, strp_patterns)
+            else:
+                date_object = False
+        else:
+            try:
+                if soup.find(d_p['tag']).contents[d_p['contents']]:
+                    article_date = soup.find(d_p['tag']).contents[d_p['contents']].get_text(separator=' ', strip=True)
+                    date_object = str_to_date(article_date, strp_patterns)
+                else:
+                    date_object = False
+            except AttributeError:
+                date_object = False
+            except IndexError:
+                logging.warning(f'{soup.title.get_text()} used a soup.contents index that was out of range')
+                date_object = False
+        if date_object:
+            return article_date, date_object
+        else:
+            continue
+    return False, False
+
+
+def scrape_text(soup: BS) -> str:
+    """Return the text of an article link"""
     text = ''
     for item in soup.find_all('p'):
         text += item.get_text(separator=' ', strip=True)
     return text
 
 
-# Creates\Appends the data to a CSV file that will be created in the same folder as the program
-def data_write(site, title, date, text):
+def write_data(link: str, title: str, date: str, strp_date: datetime, text: str) -> None:
+    """Write scraped data to a csv file"""
+    if not date:
+        logging.warning(f'Date pattern or strp_pattern was not successful for {link}')
+        date = 'No date found'
+        strp_date = 'No date to make date object'
+    else:
+        pass
     with open('Scraped_News.csv', 'a', newline='', encoding='utf-8') as a:
         writer = csv.writer(a)
-        writer.writerow([site, title, date, text])
+        writer.writerow([link, title, date, strp_date, text])
 
 
-# Search parameters for each site to scrape, takes a variable containing a dictionary, all keys are necessary,
-# date_patterns accepts values of False for 'search' and 'contents', if they are not needed
-def site_parameters():
+def site_info() -> list[dict]:
     """
     Assign a dictionary to a variable with scraping parameters for news websites.
 
-     'site': as one website link in string format,
+    'site': As one website link in string format,
 
-    'link_patterns': as a list of strings to plug into re.compile to return news article links from the href attribute of the
-    'a' tag
-
-    'date_patterns': as a list of dictionaries with four mandatory parameters to help find a publishing date,
-    'tag': A Bs4 tag to search in, 'search': a string to use in string=re.compile('search'), can be left as False,
-    'contents': an integer to use for an index of Bs4 tag.contents[], can be left as False
-
-    'strp_patterns': as a list of strings to use in transforming a date into a strptime object. Must copy the exact
-    format of what is found with the date search.
+    'link_patterns': as a list of strings to use as filters for a regex search to find news article links
+                     using the href attribute of the 'a' tag of a soup object
     """
 
-    global_news = {'site': 'https://globalnews.ca/montreal/',
-                   'link_patterns': ["/news/"],
-                   'date_patterns': [{'tag': 'span', 'search': 'Posted', 'contents': False},
-                                     {'tag': 'div', 'search': 'Updated', 'contents': False}],
-                   'strp_patterns': ['Posted %B %d, %Y %I:%M %p', 'Published %B %d, %Y']
-                   }
-    washington_news = {'site': 'https://www.washingtonpost.com/',
-                       'link_patterns': ["\.com\/(?!information|tablet|live|discussions).*\/\d{4}\/\d{2}\/\d{2}"],
-                       'date_patterns': [{'tag': 'span', 'search': 'EST', 'contents': False}],
-                       'strp_patterns': ['%B %d, %Y at %I:%M p.m. EST', '%B %d, %Y at %I:%M a.m. EST']
-                       }
-    fox_news = {'site': 'https://foxnews.com',
-                'link_patterns': ["-[0-9|a-z]+-[0-9|a-z]+-[0-9|a-z]+$"],
-                'date_patterns': [{'tag': 'time', 'search': False, 'contents': False}],
-                'strp_patterns': ['%B %d, %Y %I:%M%p EST']
-                }
-    tmz_news = {'site': 'https://www.tmz.com/',
-                'link_patterns': ['\.com(?!=photos)\/\d{4}\/\d{2}\/\d{2}'],
-                'date_patterns': [{'tag': 'h5', 'search': False, 'contents': -1}],
-                'strp_patterns': ['%m/%d/%Y %I:%M %p PT']
-                }
-    # The sites to include for scraping
-    site_parameters = [tmz_news, fox_news]
-    return site_parameters
+    global_news = dict(web_link='https://globalnews.ca/montreal/', link_patterns=["/news/"])
+    washington_news = dict(web_link='https://www.washingtonpost.com/',
+                           link_patterns=[r"\.com\/(?!information|tablet|live|discussions).*\/\d{4}\/\d{2}\/\d{2}"]
+                           )
+    fox_news = dict(web_link='https://foxnews.com', link_patterns=["-[0-9|a-z]+-[0-9|a-z]+-[0-9|a-z]+$"])
+    tmz_news = dict(web_link='https://www.tmz.com/', link_patterns=[r'tmz\.com(?!=photos)\/\d{4}\/\d{2}\/\d{2}'])
+    scrape_sites = [washington_news, global_news, tmz_news, fox_news]
+    return scrape_sites
+
+
+async def main():
+    date_patterns = [dict(tag='span', search='Posted', contents=False),
+                     dict(tag='div', search='Updated', contents=False),
+                     dict(tag='span', search='EST', contents=False),
+                     dict(tag='span', search='EDT', contents=False),
+                     dict(tag='time', search=False, contents=False),
+                     dict(tag='h5', search=False, contents=-1)]
+    strp_patterns = ['Posted %B %d, %Y %I:%M %p', 'Published %B %d, %Y', 'Updated %B %d, %Y %I:%M %p',
+                     '%B %d, %Y at %I:%M p.m. EST', '%B %d, %Y at %I:%M a.m. EST', '%B %d, %Y at %I:%M p.m. EDT',
+                     '%B %d, %Y at %I:%M a.m. EDT', '%B %d, %Y %I:%M%p EST', '%B %d, %Y %I:%M%p EDT',
+                     '%m/%d/%Y %I:%M %p PT'
+                     ]
+    article_links = set()
+    queue = asyncio.Queue()
+    async with aiohttp.ClientSession() as session:
+        for site in site_info():
+            response, url = await site_response(session, site['web_link'])
+            soup = make_soup(response)
+            href_list = collect_hrefs(soup, site['link_patterns'])
+            print(f"{len(href_list)} links were collected from {url}")
+            article_links.update(href_list)
+        link_queue = asyncio.create_task(queue_maker(article_links, queue))
+        # Change the max range to scrape faster or slower
+        tasks = [process_queue(session, queue) for _ in range(20)]
+        await queue.join()
+        print('Article links have been added to the queue.')
+        print('Beginning scraping, please wait...')
+        response_list = await asyncio.gather(*tasks)
+        link_queue.cancel()
+    scraped_time = perf_counter()
+    print(f'Scraping took {scraped_time - start_time} seconds')
+    print('Scraping complete, writing to file')
+    for link_responses in response_list:
+        for response in link_responses:
+            article_soup = make_soup(response[0])
+            link = response[1]
+            title = scrape_title(article_soup)
+            date, strp_date = scrape_date(article_soup, date_patterns, strp_patterns)
+            text = scrape_text(article_soup)
+            write_data(link, title, date, strp_date, text)
 
 
 if __name__ == '__main__':
-    link_counter = 0
-    tik = perf_counter()
-    site_params = site_parameters()
-    for site_param in site_params:
-        site_soup = make_soup(site_param['site'])
-        href_links = collect_hrefs(site_soup, site_param['link_patterns'])
-        link_counter += len(href_links)
-        for link in href_links:
-            article_soup = make_soup(link)
-            title = scrape_title(article_soup)
-            date = scrape_date(article_soup, site_param['date_patterns'])
-            strp_date = str_to_date(date, site_param['strp_patterns'])
-            text = scrape_text(article_soup)
-            data_write(link, title, strp_date, text)
-    tok = perf_counter()
-    print(f'{link_counter} links were collected in {tok - tik} seconds.')
+    start_time = perf_counter()
+    # To avoid a cancel error that seems to arise with this version of Pycharm on a Windows system
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main())
+    complete_time = perf_counter()
+    print(f'Links were collected in {complete_time - start_time} seconds.')
