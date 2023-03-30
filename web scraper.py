@@ -11,6 +11,26 @@ from time import perf_counter
 logging.basicConfig(filename='web_scraper_logs.log', filemode='w')
 
 
+def site_info() -> list[dict]:
+    """
+    Assign a dictionary to a variable with scraping parameters for news websites.
+
+    'site': As one website link in string format,
+
+    'link_patterns': as a list of strings to use as filters for a regex search to find news article links
+                     using the href attribute of the 'a' tag of a soup object
+    """
+
+    global_news = dict(web_link='https://globalnews.ca/montreal/', link_patterns=["/news/"])
+    washington_news = dict(web_link='https://www.washingtonpost.com/',
+                           link_patterns=[r"\.com\/(?!information|tablet|live|discussions).*\/\d{4}\/\d{2}\/\d{2}"]
+                           )
+    fox_news = dict(web_link='https://foxnews.com', link_patterns=["-[0-9|a-z]+-[0-9|a-z]+-[0-9|a-z]+$"])
+    tmz_news = dict(web_link='https://www.tmz.com/', link_patterns=[r'tmz\.com(?!=photos)\/\d{4}\/\d{2}\/\d{2}'])
+    scrape_sites = [washington_news, global_news, tmz_news, fox_news]
+    return scrape_sites
+
+
 async def site_response(session: aiohttp.ClientSession, link: str) -> list[str, str]:
     """Return a response object from a weblink"""
     try:
@@ -134,27 +154,13 @@ def write_data(link: str, title: str, date: str, strp_date: datetime, text: str)
         writer.writerow([link, title, date, strp_date, text])
 
 
-def site_info() -> list[dict]:
-    """
-    Assign a dictionary to a variable with scraping parameters for news websites.
-
-    'site': As one website link in string format,
-
-    'link_patterns': as a list of strings to use as filters for a regex search to find news article links
-                     using the href attribute of the 'a' tag of a soup object
-    """
-
-    global_news = dict(web_link='https://globalnews.ca/montreal/', link_patterns=["/news/"])
-    washington_news = dict(web_link='https://www.washingtonpost.com/',
-                           link_patterns=[r"\.com\/(?!information|tablet|live|discussions).*\/\d{4}\/\d{2}\/\d{2}"]
-                           )
-    fox_news = dict(web_link='https://foxnews.com', link_patterns=["-[0-9|a-z]+-[0-9|a-z]+-[0-9|a-z]+$"])
-    tmz_news = dict(web_link='https://www.tmz.com/', link_patterns=[r'tmz\.com(?!=photos)\/\d{4}\/\d{2}\/\d{2}'])
-    scrape_sites = [washington_news, global_news, tmz_news, fox_news]
-    return scrape_sites
-
-
 async def main():
+    """Date patterns and datetime object patterns for scraping article links.
+    'tag' is mandatory, the tag to search for date info.
+    Use search or contents, leave the other as False:
+    'search' will be used in string=re.compile() of BeautifulSoup
+     'contents' is an integer for a list index of string items in a tag
+     'strp_patterns' must be a string used in strptime to make a date object"""
     date_patterns = [dict(tag='span', search='Posted', contents=False),
                      dict(tag='div', search='Updated', contents=False),
                      dict(tag='span', search='EST', contents=False),
