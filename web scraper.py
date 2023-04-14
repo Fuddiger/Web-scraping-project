@@ -10,25 +10,42 @@ from time import perf_counter
 # Logs issues where information could not be correctly scraped, issues with scrape patterns and connection issues
 logging.basicConfig(filename='web_scraper_logs.log', filemode='w')
 
+"""
+Assign a dictionary to a variable with scraping parameters for news websites.
 
-def site_info() -> list[dict]:
-    """
-    Assign a dictionary to a variable with scraping parameters for news websites.
+'site': As one website link in string format,
 
-    'site': As one website link in string format,
+'link_patterns': as a list of strings to use as filters for a regex search to find news article links
+                 using the href attribute of the 'a' tag of a soup object
+"""
+global_news = dict(web_link='https://globalnews.ca/montreal/', link_patterns=["/news/"])
+washington_news = dict(web_link='https://www.washingtonpost.com/',
+                       link_patterns=[r"\.com\/(?!information|tablet|live|discussions).*\/\d{4}\/\d{2}\/\d{2}"]
+                       )
+fox_news = dict(web_link='https://foxnews.com', link_patterns=["-[0-9|a-z]+-[0-9|a-z]+-[0-9|a-z]+$"])
+tmz_news = dict(web_link='https://www.tmz.com/', link_patterns=[r'tmz\.com(?!=photos)\/\d{4}\/\d{2}\/\d{2}'])
 
-    'link_patterns': as a list of strings to use as filters for a regex search to find news article links
-                     using the href attribute of the 'a' tag of a soup object
-    """
+scrape_sites = [washington_news, global_news, tmz_news, fox_news]
 
-    global_news = dict(web_link='https://globalnews.ca/montreal/', link_patterns=["/news/"])
-    washington_news = dict(web_link='https://www.washingtonpost.com/',
-                           link_patterns=[r"\.com\/(?!information|tablet|live|discussions).*\/\d{4}\/\d{2}\/\d{2}"]
-                           )
-    fox_news = dict(web_link='https://foxnews.com', link_patterns=["-[0-9|a-z]+-[0-9|a-z]+-[0-9|a-z]+$"])
-    tmz_news = dict(web_link='https://www.tmz.com/', link_patterns=[r'tmz\.com(?!=photos)\/\d{4}\/\d{2}\/\d{2}'])
-    scrape_sites = [washington_news, global_news, tmz_news, fox_news]
-    return scrape_sites
+"""
+Date patterns and datetime object patterns for scraping article links.
+'tag' is mandatory, the tag to search for date info.
+Choose between 'search' or 'contents', leave the other as False:
+'search' will be used in string=re.compile() of BeautifulSoup
+'contents' is an integer for a list index of string items in a tag
+'strp_patterns' must be a string used in strptime to make a date object
+"""
+date_patterns = [dict(tag='span', search='Posted', contents=False),
+                     dict(tag='div', search='Updated', contents=False),
+                     dict(tag='span', search='EST', contents=False),
+                     dict(tag='span', search='EDT', contents=False),
+                     dict(tag='time', search=False, contents=False),
+                     dict(tag='h5', search=False, contents=-1)]
+strp_patterns = ['Posted %B %d, %Y %I:%M %p', 'Published %B %d, %Y', 'Updated %B %d, %Y %I:%M %p',
+                 '%B %d, %Y at %I:%M p.m. EST', '%B %d, %Y at %I:%M a.m. EST', '%B %d, %Y at %I:%M p.m. EDT',
+                 '%B %d, %Y at %I:%M a.m. EDT', '%B %d, %Y %I:%M%p EST', '%B %d, %Y %I:%M%p EDT',
+                 '%m/%d/%Y %I:%M %p PT'
+                 ]
 
 
 async def site_response(session: aiohttp.ClientSession, link: str) -> list[str, str]:
@@ -155,32 +172,16 @@ def write_data(link: str, title: str, date: str, strp_date: datetime, text: str)
 
 
 async def main():
-    """Date patterns and datetime object patterns for scraping article links.
-    'tag' is mandatory, the tag to search for date info.
-    Use search or contents, leave the other as False:
-    'search' will be used in string=re.compile() of BeautifulSoup
-     'contents' is an integer for a list index of string items in a tag
-     'strp_patterns' must be a string used in strptime to make a date object"""
-    date_patterns = [dict(tag='span', search='Posted', contents=False),
-                     dict(tag='div', search='Updated', contents=False),
-                     dict(tag='span', search='EST', contents=False),
-                     dict(tag='span', search='EDT', contents=False),
-                     dict(tag='time', search=False, contents=False),
-                     dict(tag='h5', search=False, contents=-1)]
-    strp_patterns = ['Posted %B %d, %Y %I:%M %p', 'Published %B %d, %Y', 'Updated %B %d, %Y %I:%M %p',
-                     '%B %d, %Y at %I:%M p.m. EST', '%B %d, %Y at %I:%M a.m. EST', '%B %d, %Y at %I:%M p.m. EDT',
-                     '%B %d, %Y at %I:%M a.m. EDT', '%B %d, %Y %I:%M%p EST', '%B %d, %Y %I:%M%p EDT',
-                     '%m/%d/%Y %I:%M %p PT'
-                     ]
     article_links = set()
     queue = asyncio.Queue()
     async with aiohttp.ClientSession() as session:
-        for site in site_info():
+        for site in scrape_sites:
             response, url = await site_response(session, site['web_link'])
-            soup = make_soup(response)
-            href_list = collect_hrefs(soup, site['link_patterns'])
-            print(f"{len(href_list)} links were collected from {url}")
-            article_links.update(href_list)
+            if response:
+                soup = make_soup(response)
+                href_list = collect_hrefs(soup, site['link_patterns'])
+                print(f"{len(href_list)} links were collected from {url}")
+                article_links.update(href_list)
         link_queue = asyncio.create_task(queue_maker(article_links, queue))
         # Change the max range to scrape faster or slower
         tasks = [process_queue(session, queue) for _ in range(20)]
